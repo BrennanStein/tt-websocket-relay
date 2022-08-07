@@ -174,6 +174,7 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
             else => { break; }
         }
     }
+    println!("End client loop")
 }
 
 async fn accept(client_id: i64, client_recv: Receiver<Option<String>>, sender: Sender<(i64, Option<TTRequest>)>, stream: TcpStream) {
@@ -185,6 +186,7 @@ async fn accept(client_id: i64, client_recv: Receiver<Option<String>>, sender: S
         }
     };
 
+    println!("process client");
     process_client(client_id, ws_stream, client_recv, sender).await;
 }
 
@@ -201,7 +203,7 @@ async fn main() {
     let mut id: i64 = 0;
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr().expect("connected streams should have a peer address");
-        info!("Peer address: {}", peer);
+        println!("Peer address: {}", peer);
 
         let (cc_s, cc_r) = tokio::sync::mpsc::channel(100);
         clients.lock().await.clients.insert(id, cc_s);
