@@ -121,15 +121,20 @@ async fn process_disconnect(db: &mut Database, conns: &Arc<Mutex<Clients>>, send
 
 async fn process_join(db: &mut Database, connections: &Arc<Mutex<Clients>>, sender_id: i64, msg: TTRequest) {
     println!("Join {:?}", &msg);
-    let body_json: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
+    let mut body_json: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
     let room = body_json.get("arg").unwrap().as_str().unwrap();
     println!("BD {:?}", &body_json);
     println!("{:?}", &db);
     println!("ROOM {:?}", room);
     if let Some(s) = db.games.get(room) {
         let host = s.players.iter().filter(|x| x.playerId == 0).next().unwrap();
-        let val = Some(serde_json::to_string(&msg).unwrap());
-        println!("Joined room successfully {:?}", &val);
+    
+        let mut clone = msg.clone();
+        body_json["arg"] = serde_json::Value::String(sender_id.to_string());
+        clone.payload = serde_json::to_string(&body_json).unwrap();
+
+        let val = Some(serde_json::to_string(&clone).unwrap());
+        println!("Room joined {:?}", &val);
         connections.lock().await.clients.get(&host.connectionId).unwrap().send(val).await;
     } else {
         let mut clone = msg.clone();
@@ -161,7 +166,7 @@ async fn process_server(connections: Arc<Mutex<Clients>>, mut recv: Receiver<(i6
                 "join" => process_join(&mut db, &connections, sender_id, request).await,
                 "addGuest" => process_add_guest(&mut db, &connections, sender_id, request).await,
                 "send" => process_send(&mut db, &connections, sender_id, request).await,
-                _ => { continue; }
+                e => { println!("Unrecognized command {:?}", e); continue; }
             }
         } else {
             process_disconnect(&mut db, &connections, sender_id).await;
@@ -213,7 +218,6 @@ async fn accept(client_id: i64, client_recv: Receiver<Option<String>>, sender: S
 
 #[tokio::main]
 async fn main() {
-    let addr = "127.0.0.1:9002";
     let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 9002)).await.expect("Listen failure");
 
     let (cmd_send, cmd_recv) = tokio::sync::mpsc::channel(1000);
@@ -223,7 +227,6 @@ async fn main() {
     let mut id: i64 = 0;
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr().expect("connected streams should have a peer address");
-        info!("Peer address: {}", peer);
 
         let (cc_s, cc_r) = tokio::sync::mpsc::channel(100);
         clients.lock().await.clients.insert(id, cc_s);
