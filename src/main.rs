@@ -150,7 +150,9 @@ async fn process_send(db: &mut Database, connections: &Arc<Mutex<Clients>>, send
     let mut clients = connections.lock().await;
     for recip in msg.recipients {
         if let Some(s) = clients.clients.get_mut(&(recip.into())) {
-            s.send(Some(resp.clone())).await.unwrap();
+            if let Err(e) = s.send(Some(resp.clone())).await {
+                println!("Send channel error {:?} {:?}", e, resp);
+            }
         } else {
             println!("Recipient not found");
         }
@@ -178,7 +180,7 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
     loop {
         tokio::select! {
             inbound = socket.next() => {
-                println!("Recv to {} {:?}", client_id, &inbound);
+            //   println!("Recv to {} {:?}", client_id, &inbound);
 
                 if let Some(s) = inbound {
                     if let Ok(msg) = s {
@@ -196,7 +198,7 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
                 }   
             },
             outbound = receiver.recv() => {
-                println!("Send to {} {:?}", client_id, &outbound);
+          //      println!("Send to {} {:?}", client_id, &outbound);
                 if let Some(s) = outbound.unwrap() {
                     socket.send(tungstenite::Message::Text(s)).await;
                 } else {
@@ -204,9 +206,10 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
                     break;
                 }
             }
-            else => { break; }
+            else => { println!("client error {}", &client_id); break; }
         }
     }
+    println!("Ending client loop {}", &client_id);
 }
 
 async fn accept(client_id: i64, client_recv: Receiver<Option<String>>, sender: Sender<(i64, Option<TTRequest>)>, stream: TcpStream) {
