@@ -111,12 +111,17 @@ async fn process_disconnect(db: &mut Database, conns: &Arc<Mutex<Clients>>, send
 
 async fn process_join(db: &mut Database, connections: &Arc<Mutex<Clients>>, sender_id: i64, msg: TTRequest) {
     println!("Join {:?}", &msg);
-    let body_json: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
+    let mut body_json: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
     let room = body_json.get("arg").unwrap().as_str().unwrap();
 
     if let Some(s) = db.games.get(room) {
         let host = s.players.iter().filter(|x| x.playerId == 0).next().unwrap();
-        let val = Some(serde_json::to_string(&msg).unwrap());
+        let mut clone = msg.clone();
+
+        body_json["arg"] = serde_json::Value::String(sender_id.to_string());
+        clone.payload = serde_json::to_string(&body_json).unwrap();
+
+        let val = Some(serde_json::to_string(&clone).unwrap());
         connections.lock().await.clients.get(&host.connectionId).unwrap().send(val).await;
     } else {
         let mut clone = msg.clone();
