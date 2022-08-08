@@ -178,6 +178,8 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
     loop {
         tokio::select! {
             inbound = socket.next() => {
+                println!("Recv to {} {:?}", client_id, &inbound);
+
                 if let Some(s) = inbound {
                     if let Ok(msg) = s {
                         if msg.is_text() {
@@ -185,13 +187,16 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
                             sender.send((client_id, Some(msg2))).await.unwrap();
                         }
                     } else {
-                        socket.close(None).await.unwrap();
+                        socket.close(None).await;
+                        break;
                     }
                 } else {
-                    socket.close(None).await.unwrap();
+                    socket.close(None).await;
+                    break;
                 }   
             },
             outbound = receiver.recv() => {
+                println!("Send to {} {:?}", client_id, &outbound);
                 if let Some(s) = outbound.unwrap() {
                     socket.send(tungstenite::Message::Text(s)).await;
                 } else {
