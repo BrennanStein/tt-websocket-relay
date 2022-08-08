@@ -129,7 +129,7 @@ async fn process_join(db: &mut Database, connections: &Arc<Mutex<Clients>>, send
     if let Some(s) = db.games.get(room) {
         let host = s.players.iter().filter(|x| x.playerId == 0).next().unwrap();
         let val = Some(serde_json::to_string(&msg).unwrap());
-      println!("Joined room successfully {:?}", &val);
+        println!("Joined room successfully {:?}", &val);
         connections.lock().await.clients.get(&host.connectionId).unwrap().send(val).await;
     } else {
         let mut clone = msg.clone();
@@ -169,15 +169,22 @@ async fn process_server(connections: Arc<Mutex<Clients>>, mut recv: Receiver<(i6
     }
 }
 
-async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, mut receiver: Receiver<Option<String>>, sender: Sender<(i64, Option<TTRequest>)>) {   
+async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, mut receiver: Receiver<Option<String>>, sender: Sender<(i64, Option<TTRequest>)>) {      
     loop {
         tokio::select! {
             inbound = socket.next() => {
-                let msg = inbound.unwrap().unwrap();
-                if msg.is_text() {
-                    let msg2: TTRequest = serde_json::from_str(&msg.into_text().unwrap()).unwrap();
-                    sender.send((client_id, Some(msg2))).await.unwrap();
-                }
+                if let Some(s) = inbound {
+                    if let Ok(msg) = s {
+                        if msg.is_text() {
+                            let msg2: TTRequest = serde_json::from_str(&msg.into_text().unwrap()).unwrap();
+                            sender.send((client_id, Some(msg2))).await.unwrap();
+                        }
+                    } else {
+                        socket.close(None).await.unwrap();
+                    }
+                } else {
+                    socket.close(None).await.unwrap();
+                }   
             },
             outbound = receiver.recv() => {
                 if let Some(s) = outbound.unwrap() {
