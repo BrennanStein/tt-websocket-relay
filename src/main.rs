@@ -191,8 +191,7 @@ async fn accept(client_id: i64, client_recv: Receiver<Option<String>>, sender: S
 #[tokio::main]
 async fn main() {
     let addr = "127.0.0.1:9002";
-    let listener = TcpListener::bind(&addr).await.expect("Can't listen");
-    info!("Listening on: {}", addr);
+    let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 9002)).await.expect("Listen failure");
 
     let (cmd_send, cmd_recv) = tokio::sync::mpsc::channel(1000);
     let clients = Arc::new(Mutex::new(Clients { clients: HashMap::new() }));
