@@ -24,15 +24,18 @@ pub struct TTRequest {
     pub payload: String
 }
 
+#[derive(Debug)]
 pub struct PlayerData {
     pub playerId: i64,
     pub connectionId: i64
 }
 
+#[derive(Debug)]
 pub struct GameData {
     pub players: Vec<PlayerData>
 }
 
+#[derive(Debug)]
 pub struct Database {
     // Map from ConnectionID to GameID
     pub connections: HashMap<i64, String>,
@@ -47,15 +50,24 @@ impl Database {
         }
     }
 }
+fn gen_password() -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const PASSWORD_LEN: usize = 4;
+    let mut rng = rand::thread_rng();
 
+    let password: String = (0..PASSWORD_LEN)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect();
+        password
+}
 async fn process_host(db: &mut Database, conns: &Arc<Mutex<Clients>>, sender_id: i64, mut msg: TTRequest) {
     println!("Hosting {:?}", msg);
-    let new_game_id: String = rand::thread_rng()
-        .sample_iter(rand::distributions::Alphanumeric)
-        .take(4)
-        .map(char::from)
-        .collect();
 
+    let new_game_id = gen_password();
     db.connections.insert(sender_id, new_game_id.clone());
     db.games.insert(new_game_id.clone(), GameData { players: vec!(PlayerData { playerId: 0, connectionId: sender_id }) });
 
@@ -110,16 +122,20 @@ async fn process_disconnect(db: &mut Database, conns: &Arc<Mutex<Clients>>, send
 async fn process_join(db: &mut Database, connections: &Arc<Mutex<Clients>>, sender_id: i64, msg: TTRequest) {
     println!("Join {:?}", &msg);
     let body_json: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
-    let room = body_json.get("arg").unwrap().to_string();
-
-    if let Some(s) = db.games.get(&room) {
+    let room = body_json.get("arg").unwrap().as_str().unwrap();
+    println!("BD {:?}", &body_json);
+    println!("{:?}", &db);
+    println!("ROOM {:?}", room);
+    if let Some(s) = db.games.get(room) {
         let host = s.players.iter().filter(|x| x.playerId == 0).next().unwrap();
         let val = Some(serde_json::to_string(&msg).unwrap());
+      println!("Joined room successfully {:?}", &val);
         connections.lock().await.clients.get(&host.connectionId).unwrap().send(val).await;
     } else {
         let mut clone = msg.clone();
         clone.messageId += 1;
         let val = Some(serde_json::to_string(&clone).unwrap());
+        println!("Join failed {:?}", &val);
         connections.lock().await.clients.get(&sender_id).unwrap().send(val).await;
     }
 }
