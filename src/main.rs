@@ -41,10 +41,12 @@ pub struct Database {
 
 impl Database {
     pub fn new() -> Database {
-        Database { 
+        let mut db = Database { 
             connections: HashMap::new(),
             games: HashMap::new()
-        }
+        };
+
+        db
     }
 }
 
@@ -110,9 +112,9 @@ async fn process_disconnect(db: &mut Database, conns: &Arc<Mutex<Clients>>, send
 async fn process_join(db: &mut Database, connections: &Arc<Mutex<Clients>>, sender_id: i64, msg: TTRequest) {
     println!("Join {:?}", &msg);
     let body_json: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
-    let room = body_json.get("arg").unwrap().to_string();
+    let room = body_json.get("arg").unwrap().as_str().unwrap();
 
-    if let Some(s) = db.games.get(&room) {
+    if let Some(s) = db.games.get(room) {
         let host = s.players.iter().filter(|x| x.playerId == 0).next().unwrap();
         let val = Some(serde_json::to_string(&msg).unwrap());
         connections.lock().await.clients.get(&host.connectionId).unwrap().send(val).await;
