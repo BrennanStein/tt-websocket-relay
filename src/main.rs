@@ -153,7 +153,9 @@ async fn process_send(db: &mut Database, connections: &Arc<Mutex<Clients>>, send
         let client_id = room.iter().filter(|x|x.player_id == i64::from(recip)).next();
         if let Some(cid) = client_id {
             if let Some(s) = clients.clients.get_mut(&(cid.connection_id)) {
-                s.send(Some(resp.clone())).await;
+                if let Err(e) = s.send(Some(resp.clone())).await {
+                    println!("Send channel error {:?} {:?}", e, resp);
+                }
             } else {
                 println!("Recipient not found");
             }
@@ -211,9 +213,10 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
                     break;
                 }
             }
-            else => { break; }
+            else => { println!("client error {}", &client_id); break; }
         }
     }
+    println!("Ending client loop {}", &client_id);
 }
 
 async fn accept(client_id: i64, client_recv: Receiver<Option<String>>, sender: Sender<(i64, Option<TTRequest>)>, stream: TcpStream) {
