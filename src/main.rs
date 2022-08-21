@@ -1,6 +1,4 @@
 use futures::{StreamExt, SinkExt};
-use log::*;
-use rand::Rng;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Error, WebSocketStream};
 use serde::{Serialize, Deserialize};
@@ -9,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Sender, Receiver};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Clients {
     clients: HashMap<i64, Sender<Option<String>>>
@@ -26,8 +25,8 @@ pub struct TTRequest {
 
 #[derive(Debug)]
 pub struct PlayerData {
-    pub playerId: i64,
-    pub connectionId: i64
+    pub player_id: i64,
+    pub connection_id: i64
 }
 
 #[derive(Debug)]
@@ -50,7 +49,8 @@ impl Database {
         }
     }
 }
-fn gen_password() -> String {
+
+fn gen_password(db: &Database) -> String {
     use rand::Rng;
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const PASSWORD_LEN: usize = 4;
@@ -62,14 +62,14 @@ fn gen_password() -> String {
             CHARSET[idx] as char
         })
         .collect();
-        password
+    if db.games.contains_key(&password) { gen_password(db) } else {password}
 }
 async fn process_host(db: &mut Database, conns: &Arc<Mutex<Clients>>, sender_id: i64, mut msg: TTRequest) {
     println!("Hosting {:?}", msg);
 
-    let new_game_id = gen_password();
+    let new_game_id = gen_password(&db);
     db.connections.insert(sender_id, new_game_id.clone());
-    db.games.insert(new_game_id.clone(), GameData { players: vec!(PlayerData { playerId: 0, connectionId: sender_id }) });
+    db.games.insert(new_game_id.clone(), GameData { players: vec!(PlayerData { player_id: 0, connection_id: sender_id }) });
 
     let mut parsed_payload: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
     parsed_payload["gameId"] = serde_json::Value::String(new_game_id.clone());
@@ -81,7 +81,7 @@ async fn process_host(db: &mut Database, conns: &Arc<Mutex<Clients>>, sender_id:
     }
 }
 
-async fn process_add_guest(db: &mut Database, conns: &Arc<Mutex<Clients>>, sender_id: i64, mut msg: TTRequest) {
+async fn process_add_guest(db: &mut Database, conns: &Arc<Mutex<Clients>>, _sender_id: i64, mut msg: TTRequest) {
     println!("Add guest {:?}", &msg);
     let mut body_json: serde_json::Value = serde_json::from_str(&msg.payload).unwrap();
     let new_pid = msg.recipients.first().unwrap();
@@ -89,7 +89,7 @@ async fn process_add_guest(db: &mut Database, conns: &Arc<Mutex<Clients>>, sende
 
     if *new_pid > 0 {
         let game = db.games.get_mut(&msg.gameId).unwrap();
-        game.players.push(PlayerData { playerId: (*new_pid).into(), connectionId: guest_connection_id });
+        game.players.push(PlayerData { player_id: (*new_pid).into(), connection_id: guest_connection_id });
         db.connections.insert(guest_connection_id, msg.gameId.clone());
         let mut m = serde_json::Map::new();
         m.insert("gameId".to_owned(), serde_json::Value::String(msg.gameId.clone()));
@@ -107,14 +107,14 @@ async fn process_disconnect(db: &mut Database, conns: &Arc<Mutex<Clients>>, send
     println!("Disconnect {:?}", &sender_id);
     if let Some(g) = db.connections.remove(&sender_id) {
         if let Some(s) = db.games.get_mut(&g) {
-            s.players.retain(|x| x.connectionId != sender_id);
+            s.players.retain(|x| x.connection_id != sender_id);
             if s.players.len() == 0 {
                 db.games.remove(&g);
             }
         }
     }
 
-    conns.lock().await.clients.get(&sender_id).unwrap().send(None).await;
+    conns.lock().await.clients.remove(&sender_id);//.get(&sender_id).unwrap().send(None).await;
     // Tell all other players still in the game their host disconnected
     // TODO
 }
@@ -127,15 +127,15 @@ async fn process_join(db: &mut Database, connections: &Arc<Mutex<Clients>>, send
     println!("{:?}", &db);
     println!("ROOM {:?}", room);
     if let Some(s) = db.games.get(room) {
-        let host = s.players.iter().filter(|x| x.playerId == 0).next().unwrap();
+        let host = s.players.iter().filter(|x| x.player_id == 0).next().unwrap();
     
         let mut clone = msg.clone();
         body_json["arg"] = serde_json::Value::String(sender_id.to_string());
         clone.payload = serde_json::to_string(&body_json).unwrap();
 
         let val = Some(serde_json::to_string(&clone).unwrap());
-        println!("Room joined {:?}", &val);
-        connections.lock().await.clients.get(&host.connectionId).unwrap().send(val).await;
+        println!("Room joined: Informing {:?} of {:?} in {:?}", &host.connection_id, &sender_id, &val);
+        connections.lock().await.clients.get(&host.connection_id).unwrap().send(val).await;
     } else {
         let mut clone = msg.clone();
         clone.messageId += 1;
@@ -148,11 +148,15 @@ async fn process_join(db: &mut Database, connections: &Arc<Mutex<Clients>>, send
 async fn process_send(db: &mut Database, connections: &Arc<Mutex<Clients>>, sender_id: i64, msg: TTRequest) {
     let resp = serde_json::to_string(&msg).unwrap();
     let mut clients = connections.lock().await;
+    let room = &db.games.get(db.connections.get(&sender_id).unwrap()).unwrap().players;
     for recip in msg.recipients {
-        if let Some(s) = clients.clients.get_mut(&(recip.into())) {
-            s.send(Some(resp.clone())).await.unwrap();
-        } else {
-            println!("Recipient not found");
+        let client_id = room.iter().filter(|x|x.player_id == i64::from(recip)).next();
+        if let Some(cid) = client_id {
+            if let Some(s) = clients.clients.get_mut(&(cid.connection_id)) {
+                s.send(Some(resp.clone())).await;
+            } else {
+                println!("Recipient not found");
+            }
         }
     }
 }
@@ -170,6 +174,7 @@ async fn process_server(connections: Arc<Mutex<Clients>>, mut recv: Receiver<(i6
             }
         } else {
             process_disconnect(&mut db, &connections, sender_id).await;
+            println!("Player disconnected. DB: {:?}", &db);
         }
     }
 }
@@ -178,7 +183,9 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
     loop {
         tokio::select! {
             inbound = socket.next() => {
-                println!("Recv to {} {:?}", client_id, &inbound);
+                if !format!("{:?}", &inbound).contains("position") {
+                    println!("Recv to {} {:?}", client_id, &inbound);
+                }
 
                 if let Some(s) = inbound {
                     if let Ok(msg) = s {
@@ -187,20 +194,20 @@ async fn process_client(client_id: i64, mut socket: WebSocketStream<TcpStream>, 
                             sender.send((client_id, Some(msg2))).await.unwrap();
                         }
                     } else {
-                        socket.close(None).await;
                         break;
                     }
                 } else {
-                    socket.close(None).await;
                     break;
                 }   
             },
             outbound = receiver.recv() => {
-                println!("Send to {} {:?}", client_id, &outbound);
+                if !format!("{:?}", &outbound).contains("position") {
+                    println!("Send to {} {:?}", client_id, &outbound);
+                }
+
                 if let Some(s) = outbound.unwrap() {
-                    socket.send(tungstenite::Message::Text(s)).await;
+                    socket.send(tungstenite::Message::Text(s)).await.unwrap();
                 } else {
-                    socket.close(None).await;
                     break;
                 }
             }
@@ -218,7 +225,8 @@ async fn accept(client_id: i64, client_recv: Receiver<Option<String>>, sender: S
         }
     };
 
-    process_client(client_id, ws_stream, client_recv, sender).await;
+    process_client(client_id, ws_stream, client_recv, sender.clone()).await;
+    sender.send((client_id, None)).await.unwrap();
 }
 
 #[tokio::main]
@@ -231,8 +239,6 @@ async fn main() {
 
     let mut id: i64 = 0;
     while let Ok((stream, _)) = listener.accept().await {
-        let peer = stream.peer_addr().expect("connected streams should have a peer address");
-
         let (cc_s, cc_r) = tokio::sync::mpsc::channel(100);
         clients.lock().await.clients.insert(id, cc_s);
         
